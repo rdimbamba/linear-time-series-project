@@ -1,0 +1,174 @@
+---
+title: "PROJET DE SERIES TEMPORELLES LINEAIRES"
+author: "Rois-Céti DIMBAMBA L.C. et Amadou DIOUF (2AD ENSAE Paris)"
+date: "14/05/2021"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    df_print: tibble
+    highlight: tango
+---
+
+```{=html}
+<style>
+body{
+text-align: justify}
+</style>
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r Librairies}
+rm(list=ls())
+require(zoo) # Pour formalise les "time series" de manières pratiques
+require(tseries) # Pour diverses fonctions liées au "time series"
+require(fUnitRoots) # Pour le test de racine unitaire avec adfTest
+require(latex2exp) # Pour ecrire du texte en LaTeX
+require(forecast) # Pour la prevision
+library(tidyverse) # Pour la manipulation des données
+library(cowplot) # Pour plot_grid
+```
+
+```{r Importation}
+# On importe la série la base de données au format .csv
+mydatabase <- read.csv(file = file.choose(), header = TRUE, sep = ";", dec = ",")
+# On formalise notre TS (TS pout "time serie")
+date_char <- as.character(mydatabase$date)
+#date_char[1];date_char[length(date_char)]
+date.int <- as.yearmon(seq(from=1990+0/12,to=2021+2/12,by=1/12))
+xt.init <- zoo(mydatabase[,2], order.by=date.int)
+# On met dans T.int la longueur de la TS initial
+T.int <- length(xt.init)
+# On enleve les deux dernieres valeurs, pour pouvoir comaparer avec les predictions
+xt <- xt.init[1 : (T.int-2)] 
+date <- date.int[1 : (T.int-2)]
+# On met dans T la longueur de la TS qu'on utilisara dans la suite
+T <- length(xt)
+yt <- log(xt)
+zt = yt - mean(yt)
+```
+
+# Données
+
+## Série étudiée
+
+Dans ce projet, nous nous intéressons à l'indice de la production industrielle (base 100 en 2015) du secteur de l'exploitation de gravières et sablières ainsi que de l'extraction d'argiles et de kaolin. Cet indice est produit mensuellement par l'INSEE à partir des enquêtes mensuelles de branche réalisées par la Direction des statistiques d'entreprises (DES) et le Service de la Statistique et de la Prospective du ministère de l'agriculture. La série $x_t$ ici étudiée couvre la période allant de janvier 1990 à janvier 2021, soit 373 observations. Il s'agit d'une série agrégée corrigée des variations saisonnières et des jours ouvrés (CVS-CJO) et ne présente par conséquent pas de saisonnalités.
+
+L'observation de la figure ci-dessus nous fait soupçonner une présence d'hétéroscédasticité. Nous effectuons une transformation logarithmique dont le but est de lisser les observations pour à la fin se retrouver avec des données plus homoscédastiques. La série obtenue suite à cette transformation est noté $y_t = log(x_t)$. Cette dernière, toute comme la série initiale, semble présenter de tendance constante. Elle est donc centrée pour finalement obtenir la série $z_t$.
+
+```{r,collapse=TRUE,fig.height=6,fig.width=6,fig.cap="Représentation graphique de la série étudiée $x_t$ et de la série transformée $z_t$"}
+reduced_data = data.frame("date" = date, "iph" = xt, "log(iph)" = yt,
+                          "centered_log(iph)" = zt)
+g1 <- ggplot(reduced_data, aes(x = date, y = xt)) + 
+        geom_line()+
+        xlab("t") +
+        ylab(TeX("$x_t$ = iph"))
+g2 <- ggplot(reduced_data, aes(x = date, y = zt)) + 
+        geom_line()+
+        xlab("t") +
+        ylab(TeX("$z_t = y_t - mean(y_t)$")) +
+        geom_hline(yintercept = 0,
+              col = "blue", linetype = "longdash")
+plot_grid(g1, g2, ncol = 1, nrow = 2)
+```
+
+## Stationnarité
+
+Pour l'étude de la stationnarité de la série $z_t$, Nous utilisons le test de racine unitaire de Dickey-Fuller augmentée (ADF) dans le cas avec constante nulle et sans tendance. Ce test a pour hypothèse nulle la présence d'une racine unitaire synonyme de non-stationnarité. Plusieurs retards ont successivement été ajoutés jusqu'à ce que les coefficients associés ne soient plus significatifs. Le retard maximal trouvé est égal à $2$. Le test donne une probabilité critique de $0,01$, ce qui permet de rejeter au seuil de $5\%$ l'hypothèse nulle. La série $z_t$ est donc considérée comme stationnaire.
+
+# Modélisation ARMA : Méthodologie de Box et Jenkins
+
+## Identification des ordres maximaux pertinents
+
+Dans cette étape, nous ferons usage de l'autocorrélogramme (ACF) et de celui partielle (PACF) pour déterminer les ordres maximaux $q$ et $p$ du modèle ARMA. En effet, il est prouvé que dans le cas d'un $MA(q)$ la fonction d'autocorrélation $\rho(h)$ est nulle lorsque $h > q$. Il s'agit donc de voir au niveau de l'ACF l'ordre à partir duquel les autocorrélations ne sont plus significativement différentes de $0$ (à l'extérieur de la région de confiance). L'ordre $q_{max}$ ainsi trouvé est de $18$. Un résonnement similaire est observé pour ce qui est de l'ordre vu que la fonction d'autocorrélation partielle $r(h)$ d'un processus $AR(p)$ est également nulle lorsque $h > p$. L'ordre $p_{max}$ est donc égal à $6$.
+
+```{r,collapse=TRUE,fig.height=5,fig.width=6,fig.cap="Représentation ACF et PACF de $z_t$"}
+nlag = 3*12
+acf=Acf(zt,lag.max=nlag,plot=FALSE)
+pacf=Pacf(zt,lag.max=nlag,plot=FALSE)
+g3 <- autoplot(acf, lwd=2, xlab="Retards", main=TeX("ACF of $z_t$"))
+g4 <- autoplot(pacf, lwd=2, xlab="Retards", main=TeX("PACF of $z_t$"))
+plot_grid(g3, g4, ncol = 1, nrow = 2)
+```
+
+## Sélection des modèles
+
+Cette étape consiste à trouver lesquels parmi les 137 ($19\times7$) modèles possibles satisfont les conditions de validité. Il s'agit de voir si, d'une part, le modèle est bien estimé en étudiant notamment la significativité des coefficients des ordres AR et MA les plus élevés. D'autres part, il est question de voir par le bias d'un test si les résidus issus de l'estimation des modèles sont autocorrélés. Dans le cas où ils le sont, le modèle ne sera pas retenu. C'est le test de Portemanteau/Ljung-box qui sera ici utilisé pour juger de cette autocorrélation. Cette sélection permet de se ramener à 15 modèles candidats qui vérifient les conditions précités (modèle bien estimé, non autocorrélation). Pour choisir parmi ces modèles lequel est le meilleur, on fait recours à des mesure telles que le AIC et le BIC, le meilleur modèle (celui qu'on favorise le plus) étant celui dont la valeur est la plus faible. Ce dernier filtre met en évidence le modèle ARMA(3,4) et ARMA(1,2) qui minimisent respectivement le AIC et le BIC. On remarquera que le BIC favorise un modèle moins complexe, ce qui est dû à la pénalisation effectuée dans son calcul. C'est sur ce modèle que notre choix sera porté puisqu'étant plus parcimonieux. Le modèle retenu s'écrit alors :$$z_t + 0,939 z_{t-1} = \epsilon_t - 0,449 \epsilon_{t-1} - 0,264 \epsilon_{t-2}$$
+
+```{r}
+signif <- function(estim){
+  coef <- estim$coef
+  se <- sqrt(diag(estim$var.coef))
+  t <- coef/se
+  pval <- (1-pnorm(abs(t)))*2
+  return(rbind(coef,se,pval))
+}
+Qtests <- function(series, k, fitdf=0){
+  pvals <- apply(matrix(1:k), 1, FUN=function(l){
+    pval <- if (l<=fitdf) NA else Box.test(x = series, lag = l, type = "Ljung-Box", fitdf = fitdf)$p.value
+    return(c("lag"=l,"pval"=pval))
+  })
+  return(t(pvals))
+}
+valid <- function(estim){
+  pvals <- Qtests(estim$residuals, 24, length(estim$coef)-1)
+  pvals <- matrix(apply(matrix(1:24,nrow=6),2,function(c) round(pvals[c,],3)),nrow=6)
+  colnames(pvals) <- rep(c("lag", "pval"),4)
+  return(pvals)
+}
+arima102 <- arima(zt,c(1,0,2))
+knitr::kable(signif(arima102),
+             caption = "Qualité de l'ajustement du modèle ARMA(1,2) choisi")
+knitr::kable(valid(arima102),
+             caption = "Validité du modèle ARMA(1,2) choisi")
+```
+
+## Tests complémentaires
+
+Dans cette partie, le focus sera mis sur l'étude des propriétés de normalité et d'hétéroscedasticité des résidus obtenus avec le modèle ARMA(1,2). Pour ce qui est de l'hypothèse de normalité, elle intervient principalement dans la construction des intervalles de confiance des prévisions qui seront faites. Pour juger de la validité de cette hypothèse, nous utiliserons le test de Jarque-Bera. L'hypothèse nulle de ce test est la normalité de la série testée. Avec une probabilité critique de $2,2.10^{-26}$, cette hypothèse est rejetée au seuil de $1\%$. Les résidus ne sont donc pas normaux. Concernant l'hétéroscédasticité, le test de Breusch-Pagan dont l'hypothèse nulle est la l'homoscédasticité des résidus, est rejetée au seuil de $5\%$ avec une valeur critique égale à $0,016$. Il n'y a donc pas d'homoscédasticité.
+
+# Prévisions
+
+## Région de confiance de niveau $\alpha$ sur les valeurs futures $(X_{T+1}, X_{T+2})$
+
+Notons T la longueur de la série $Z_t$. On va d'abord supposer que le modèle obtenu à la question précédente est bien celle qui régit le processus générateur des observations de ladite série, c'est-à-dire que : $$Z_t \sim ARMA(1, 2)$$ Dans ce cas, le modèle théorique (avec les vrais coefficients) s'écrit sous sa forme canonique comme suit : $$(1-\phi_{1}L)Z_t = (1-\theta_{1}L)(1-\theta_{2}L)\epsilon_t$$ soit de manière équivalente : $$Z_t = \phi Z_{t-1}+\epsilon_t - (\theta_1 + \theta_2)\epsilon_{t-1} + \theta_1 \theta_2 \epsilon_{t-2}$$ On obtient par la suite les prévisions linéaires de $Z_{T+1}$ et de $Z_{T+2}$ compte tenu de l'information qu'on a à la date T comme suit : $$\left\lbrace \begin{array}{c}   _{T}Z_{T+1} = \mathbb{EL}[Z_{T+1}|Z_T, Z_{T-1}, ...] = \phi Z_T - (\theta_1 + \theta_2)\epsilon_{T} + \theta_1 \theta_2 \epsilon_{T-1} \\ _{T}Z_{T+2} = \mathbb{EL}[Z_{T+2}|Z_T, Z_{T-1}, ...] = \phi\times _{T}Z_{T+1} + \theta_1 \theta_2 \epsilon_{T} = \phi^{2} Z_T + (\theta_1 \theta_2 - \phi (\theta_1 + \theta_2))\epsilon_{T} + \phi \theta_1 \theta_2 \epsilon_{T-1} \end{array} \right.$$ Il en résulte : $$\left\lbrace \begin{array}{c} Z_{T+1} - _{T}Z_{T+1} = \epsilon_{T+1} \\ Z_{T+2} - _{T}Z_{T+2} = \phi (Z_{T+1} - _{T}Z_{T+1}) + \epsilon_{T+2} - (\theta_1 + \theta_2)\epsilon_{T+1} = (\phi - \theta_1 - \theta_2)\epsilon_{T+1} + \epsilon_{T+2} \end{array} \right.$$ En posant : $$Z = \left( \begin{array}{c} Z_{T+1} \\ Z_{T+2} \end{array} \right) \qquad , \qquad Z^{*} =\left( \begin{array}{c} _{T}Z_{T+1} \\ _{T}Z_{T+2} \end{array} \right) \qquad \mbox{et} \qquad \epsilon = \left( \begin{array}{c} \epsilon_{T+1} \\ \epsilon_{T+2} \end{array} \right)$$ Ce qui précède se réécrit : $$Z - Z^{*} = A\epsilon$$ où $$ A = \left( \begin{array}{cc} 1 & 0 \\ \phi - \theta_1 - \theta_2 & 1 \end{array} \right)$$ On va ensuite supposer que le terme d'erreur est un bruit blanc Gaussien. Ceci dit, on a : $$\epsilon \sim \mathcal{N}_{2}(0, \sigma_{\epsilon}^{2}I_{2})$$ Il s'ensuit : $$Z - Z^{*} \sim \mathcal{N}_{2}(0, \Sigma)$$ où $$ \Sigma = A(\sigma_{\epsilon}^{2}I_{2})A' = \sigma_{\epsilon}^{2}AA'$$ c'est-à-dire $$\Sigma = \sigma_{\epsilon}^{2} \left( \begin{array}{cc} 1 & 0 \\ \phi - \theta_1 - \theta_2 & 1 \end{array} \right) \left( \begin{array}{cc} 1 & \phi - \theta_1 - \theta_2 \\ 0 & 1 \end{array} \right) = \sigma_{\epsilon}^{2} \left( \begin{array}{cc} 1 & \phi - \theta_1 - \theta_2 \\ \phi - \theta_1 - \theta_2 & 1 + (\phi - \theta_1 - \theta_2)^{2} \end{array} \right)$$ Puisque $det(\Sigma)=\sigma_{\epsilon}^{4}>0$, alors $\Sigma$ est inversible et on en déduit : $$(Z - Z^{*})' {\Sigma}^{-1} (Z - Z^{*}) \sim \chi^{2}(2) $$ Dans le cadre d'un ARMA(1,2) comme spécifié ci-dessus, on peut montrer que : $$\epsilon_t = \sum_{n=0}^{+\infty}c_n (Z_{t-n} - \phi Z_{t-n-1}) \qquad \mbox{où} \qquad c_n = \sum_{k=0}^{n}\theta_{1}^{n-k} \theta_{2}^{k}$$ L'observation de ${(Z_t)}_{t\leqslant 0}$ étant non disponible dans la base, on va émettre une hypothèse forte selon laquelle $Z_t = 0 \quad \forall t\leqslant 0$. Dans ce cas, à la date T, on sera en mesure (à coefficients AR et MA supposés connus) de calculer $\epsilon_t$ pour tout $t\leqslant T$ comme suit : $$\epsilon_t = \left\lbrace \begin{array}{c} 0 \quad \mbox{si} \quad t\leqslant 1 \\ \displaystyle \sum_{n=0}^{t-1}c_n (Z_{t-n} - \phi Z_{t-n-1}) \quad \mbox{où} \quad 1<t\leqslant T  \end{array} \right.$$ Ainsi, à la date T, compte tenu de l'information que l'on dispose, on est en mesure de calculer $\epsilon_t$ pour tout $t\leqslant T$, $_{T}Z_{T+1}$, $_{T}Z_{T+2}$ et $\displaystyle \hat{\sigma}_{\epsilon}^{2}:= \dfrac{1}{T}\sum_{t=1}^{T}\epsilon_{t}^{2}$ (à coefficients AR et MA supposés connus), ce dernier étant un estimateur convergent de $\sigma_{\epsilon}^{2}$ du fait que le bruit blanc est supposé Gaussien (et donc ergodique).\
+En définissant $\hat{\Sigma} = \hat{\sigma}_{\epsilon}^{2} \left( \begin{array}{cc} 1 & \phi - \theta_1 - \theta_2 \\ \phi - \theta_1 - \theta_2 & 1 + (\phi - \theta_1 - \theta_2)^{2} \end{array} \right)$ on a par le théorème de Slutsky : $$(Z - Z^{*})' \hat{\Sigma}^{-1} (Z - Z^{*}) \xrightarrow{Loi}  \chi^{2}(2) $$ On peut donc déduire la région de confiance asymptotique (puisque T est assez grand) suivant pour $Z = \left( \begin{array}{c} Z_{T+1} \\ Z_{T+2} \end{array} \right)$, de niveau $\alpha \in ]0, 1[$ : $$RC_{\alpha}^{asympt}(Z) = \left\lbrace \underline{x} \in \mathbb{R}^{2} : (\underline{x} - Z^{*})' \hat{\Sigma}^{-1} (\underline{x} - Z^{*}) \leqslant q_{\alpha}^{Chi2}(2) \right\rbrace$$ Il suffit par exemple de supposer que les coefficients du modèle ARMA estimés dans la partie 2. sont les vrais coefficients du modèle, et on détermine aisément cette région.\
+On en déduit aisément que pour $X = \left( \begin{array}{c} X_{T+1} \\ X_{T+2} \end{array} \right)$, on a : $$RC_{\alpha}^{asympt}(X) = exp\left( \left( \begin{array}{c} mean(y_t) \\ mean(y_t) \end{array} \right)+RC_{\alpha}^{asympt}(Z)\right)$$
+
+## Hypothèses utilisées
+
+Récapitulons. Si l'on suppose les hypothèses suivantes :\
+`H1 :` Le modèle spécifié est le vrai processus générateur des observations de $Z_t$\
+`H2 :` Les erreurs $\epsilon_t$ suivent un bruit blanc Gaussien\
+`H3 :` La série $Z_t$ considérés est tronquée : $Z_t = 0 \quad \forall t\leqslant 0$\
+`H4 :` Les coefficients estimés sont les vrais paramètres (paramètres théoriques) du modèle.\
+Alors, la région de confiance obtenu ci-dessus est valide.\
+La modélisation faite à la partie 2. rend compte des hypothèses `H1` (choix du modèle par qualité d'ajustement et validité) et `H2` (test de portemanteau, d'hétéroscédasticité et de normalité). Une fois celles-ci admises, les estimateurs des paramètres théoriques sont convergents. Donc T étant assez grand, l'hypothèse `H4` semble ne pas poser un grand soucis. L'hypothèse `H3` de troncature quand à elle, souvent admise est pratique, notamment quand on a un T assez grand, tel le cas ici, nous semble assez restrictif car cela reviendrait à supposer que l'indice de production industrielle du secteur d'activité d'exploitation de gravières et sablières, d'extraction d'argiles et de kaolin, était toujours le même avant janvier 1990, date à partir de laquelle on a des observations dans notre base de données.
+
+## Représentation graphique de cette région pour $\alpha = 95\%$
+
+On représente graphiquement la région de confiance pour un niveau $\alpha = 95\%$. La limite supérieure (resp.inférieure) de la zone en bleu représente la frontière supérieure (resp.inférieure) de la région de confiance. Le trait en bleu foncé relit les deux prédictions ponctuelles pour les dates T+1 et T+2.
+
+```{r Prevision,fig.height=2,fig.width=6, fig.cap="Prévisions en T et T+1 avec région de confiance à 95%"}
+pred_arima102 <- forecast(arima102, h = 2, level = 95)
+autoplot(pred_arima102, include = 30, PI = TRUE, flwd = 1, xlab = "t", 
+         ylab = TeX("z_t"), main = " ")
+pred_xt_m = exp(mean(yt) + pred_arima102$mean)
+pred_xt_l = exp(mean(yt) + pred_arima102$lower)
+pred_xt_u = exp(mean(yt) + pred_arima102$upper)
+tab <- cbind(pred_xt_m, pred_xt_l, pred_xt_u)
+colnames(tab) = c("Prévision", "Inf.int", "Sup.int")
+knitr::kable(tab, 
+             caption = "Prévision de la série originale à T et T+1 avec IC à 95%")
+```
+
+[*Commentaires*]{.ul} : Les prévisions ponctuelles ne sont pas très loin des valeurs disponibles dans la base pour février et mars, on peut donc dire que le pouvoir prédictif du modèle est assez importante. Comme on a vu dans la partie 2. que les résidus n'étaient pas normaux, la région de confiance, dont la détermination dépend fortement de cette hypothèse, n'est donc plus interprétable.
+
+## Question ouverte
+
+Soit $Y_t$ une série stationnaire disponible de t = 1 à T. On suppose que $Y_{T+1}$ est disponible plus rapidement que $X_{T+1}$. Il est question ici de chercher à savoir sous quelles conditions cette information permet-elle d'améliorer la prévision de $X_{T+1}$.\
+Soit $\hat{X}_{T+1|\lbrace X_t , t\leqslant T \rbrace}$ (resp. $\hat{X}_{T+1|\lbrace Y_t , X_t , t\leqslant T \rbrace \cup \lbrace Y_{T+1} \rbrace}$) la prévision linéaire optimal à la date t (au sens $L^{2}$) de la variable $X_t$ étant données les variables $\lbrace X_t , t\leqslant T \rbrace \rbrace$ (resp. $\lbrace Y_t , X_t , t\leqslant T \rbrace \cup \lbrace Y_{T+1} \rbrace$). Si $Y_t$ *cause instantanément* $X_t$, alors $\hat{X}_{T+1|\lbrace X_t , t\leqslant T \rbrace} \neq \hat{X}_{T+1|\lbrace Y_t , X_t , t\leqslant T \rbrace \cup \lbrace Y_{T+1} \rbrace}$ et donc $Y_{T+1}$ est *utile* pour prédire $X_{T+1}$ à la date T. Cette condition de [*causalité instantanément*]{.ul} permet ainsi d'améliorer la prévision de $X_{T+1}$ à la date T.
